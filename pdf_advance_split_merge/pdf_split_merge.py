@@ -1,424 +1,238 @@
-import sys
 import os
-import random
-from PyQt5.QtWidgets import QApplication, QMainWindow, QPushButton, QVBoxLayout, QLabel, QWidget, QLineEdit, QFileDialog, QFrame, QHBoxLayout
-from PyQt5.QtGui import QFont
-from PyQt5 import QtCore
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-import time
+import re
+import sys
+from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QLabel, QLineEdit, QPushButton, QFileDialog, QHBoxLayout, QFrame
+import PyPDF2
+import pyperclip
 import pandas as pd
-import threading
 
 
-class PDFScraper(QMainWindow):
+class PDFExtractorApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.driver = None
-        self.load_last_session()  # Load last session values
-        self.init_ui()
-        self.loop_flag = False
-
-    def init_ui(self):
-        self.setWindowTitle("Scrape AirbusWorld")
-        self.setGeometry(100, 100, 400, 250)
+        self.setWindowTitle("PDF Extractor")
+        self.setGeometry(100, 100, 500, 200)
 
         central_widget = QWidget(self)
         self.setCentralWidget(central_widget)
 
         layout = QVBoxLayout(central_widget)
 
-        # Add title label
-        title_label = QLabel("AirbusWorld Scrapper TBS2",
-                             font=QFont("Arial", 16, QFont.Bold))
-        title_label.setAlignment(QtCore.Qt.AlignCenter)
-        layout.addWidget(title_label)
+        self.regex_page_label = QLabel("Regex for Page Identifier:")
+        layout.addWidget(self.regex_page_label)
 
-        self.username_edit = QLineEdit()
-        self.username_edit.setPlaceholderText("Enter Username")
-        self.username_edit.setText(self.username)  # Set last session username
-        layout.addWidget(self.username_edit)
+        self.regex_page_edit = QLineEdit()
+        layout.addWidget(self.regex_page_edit)
 
-        self.password_edit = QLineEdit()
-        self.password_edit.setPlaceholderText("Enter Password")
-        self.password_edit.setEchoMode(QLineEdit.Password)
-        self.password_edit.setText(self.password)  # Set last session password
-        layout.addWidget(self.password_edit)
+        self.regex_title_label = QLabel("Regex for PDF Title:")
+        layout.addWidget(self.regex_title_label)
 
-        self.customization_edit = QLineEdit()
-        self.customization_edit.setPlaceholderText("Enter Customization")
-        # Set last session customization
-        self.customization_edit.setText(self.customization)
-        layout.addWidget(self.customization_edit)
+        self.regex_title_edit = QLineEdit()
+        layout.addWidget(self.regex_title_edit)
 
-        self.msn_edit = QLineEdit()
-        self.msn_edit.setPlaceholderText("Enter MSN")
-        self.msn_edit.setText(self.MSN)  # Set last session MSN
-        layout.addWidget(self.msn_edit)
-
-        # Create a wrapper widget for the label, button, and separator
-        file_wrapper_widget = QWidget()
-        file_layout = QHBoxLayout(file_wrapper_widget)
-        # Separator line
-        separator = QFrame()
-        separator.setFrameShape(QFrame.HLine)
-        separator.setFrameShadow(QFrame.Sunken)
-        file_layout.addWidget(separator, 1)  # Set ratio to 1
-        # File path label
+        # Create a horizontal layout for file selection
+        file_layout = QHBoxLayout()
         self.file_label = QLabel("No file selected.")
         file_layout.addWidget(self.file_label)
-        # File browser button
-        self.file_button = QPushButton("Select MPD/AMM List File")
-        self.file_button.clicked.connect(self.select_excel_file)
+
+        self.file_button = QPushButton("Select PDF File")
+        self.file_button.clicked.connect(self.select_pdf_file)
         file_layout.addWidget(self.file_button)
-        # Wrap layout
+
+        layout.addLayout(file_layout)
+
+        # Create a horizontal layout for output folder selection
+        output_layout = QHBoxLayout()
+        self.output_label = QLabel("No output folder selected.")
+        output_layout.addWidget(self.output_label)
+
+        self.output_button = QPushButton("Select Output Folder")
+        self.output_button.clicked.connect(self.select_output_folder)
+        output_layout.addWidget(self.output_button)
+
+        layout.addLayout(output_layout)
+
+        self.extract_button = QPushButton("Extract PDF")
+        self.extract_button.clicked.connect(self.extract_pdf)
+        layout.addWidget(self.extract_button)
+
+        self.copy_text_button = QPushButton("Copy First Page Text")
+        self.copy_text_button.clicked.connect(self.copy_first_page_text)
+        layout.addWidget(self.copy_text_button)
+
+        # Separator line at the bottom
+        separator_line = QFrame()
+        separator_line.setFrameShape(QFrame.HLine)
+        separator_line.setFrameShadow(QFrame.Sunken)
+        layout.addWidget(separator_line)
+
+        # Input PDF file label and button
+        file_wrapper_widget = QWidget()
+        file_layout = QHBoxLayout(file_wrapper_widget)
+        self.input_file_label = QLabel("Input PDF File:")
+        file_layout.addWidget(self.input_file_label)
+        self.input_file_button = QPushButton("Select PDF Path List")
+        self.input_file_button.clicked.connect(self.select_path_list)
+        file_layout.addWidget(self.input_file_button)
         layout.addWidget(file_wrapper_widget)
 
-        self.start_button = QPushButton("Start Login")
-        self.start_button.clicked.connect(self.mulai_login)
-        layout.addWidget(self.start_button)
+        # Merge PDF button
+        self.merge_pdf_button = QPushButton("Merge PDF")
+        self.merge_pdf_button.clicked.connect(self.merge_pdfs)
+        layout.addWidget(self.merge_pdf_button)
 
-        # Scrape by MPD button
-        self.scrape_mpd_button = QPushButton("Scrape into Taskcard")
-        self.scrape_mpd_button.clicked.connect(self.start_scraping_mpd)
-        layout.addWidget(self.scrape_mpd_button)
-
-        # Stop Scraping button
-        self.stop_scraping_button = QPushButton("Stop Scraping Taskcard")
-        self.stop_scraping_button.clicked.connect(self.stop_scraping_mpd)
-        layout.addWidget(self.stop_scraping_button)
-
-        # Download Report
-        self.download_report_button = QPushButton("Download Report Scraping")
-        self.download_report_button.clicked.connect(self.download_report)
-        layout.addWidget(self.download_report_button)
-
-        # Scrape by MPD button
-        self.scrape_amm_button = QPushButton("Scrape into Non Taskcard")
-        self.scrape_amm_button.clicked.connect(self.start_scraping_amm)
-        layout.addWidget(self.scrape_amm_button)
-
-        # Stop Scraping button
-        self.stop_scraping_amm_button = QPushButton(
-            "Stop Scraping Non Taskcard")
-        self.stop_scraping_amm_button.clicked.connect(self.stop_scraping_amm)
-        layout.addWidget(self.stop_scraping_amm_button)
 
         self.status_label = QLabel("")
         layout.addWidget(self.status_label)
 
-    def load_last_session(self):
-        # Check if the settings file exists
-        if os.path.isfile("last_session.txt"):
-            with open("last_session.txt", "r") as file:
-                lines = file.readlines()
-                self.username = lines[0].strip()
-                self.password = lines[1].strip()
-                self.customization = lines[2].strip()
-                self.MSN = lines[3].strip()
-        else:
-            self.username = ""
-            self.password = ""
-            self.customization = ""
-            self.MSN = ""
+        self.pdf_file_path = ""
+        self.output_folder = ""
+
+        # Load last session regex patterns and output folder
+        self.load_last_session()
+
+    def select_pdf_file(self):
+        options = QFileDialog.Options()
+        file_path, _ = QFileDialog.getOpenFileName(self, "Select PDF File", "", "PDF Files (*.pdf)", options=options)
+        if file_path:
+            self.pdf_file_path = file_path
+            self.file_label.setText(os.path.basename(file_path))
+
+    def clean_filename(self, filename):
+        # Define the regex pattern to remove invalid characters
+        cleaned_filename = re.sub(r'[<>:"/\\|?*:\n]', '', filename)
+        return cleaned_filename
+
+    def select_output_folder(self):
+        options = QFileDialog.Options()
+        output_folder = QFileDialog.getExistingDirectory(self, "Select Output Folder", options=options)
+        if output_folder:
+            self.output_folder = output_folder
+            self.output_label.setText(output_folder)
+
+    def extract_pdf(self):
+        regex_page = self.regex_page_edit.text()
+        regex_title = self.regex_title_edit.text()
+
+        if not self.pdf_file_path or not self.output_folder or not regex_page or not regex_title:
+            self.status_label.setText("Please fill in all fields.")
+            return
+
+        with open(self.pdf_file_path, "rb") as file:
+            pdf_reader = PyPDF2.PdfReader(file)
+            num_pages = len(pdf_reader.pages)
+            # Find the start and end pages
+            start_page_text = None
+            extracted_pdf = None
+
+            for page_number in range(num_pages):
+                page = pdf_reader.pages[page_number]
+                page_text = page.extract_text()
+                
+                if re.search(regex_page, page_text) and not start_page_text:
+                    extracted_pdf = PyPDF2.PdfWriter()
+                    extracted_pdf.add_page(page)
+                    start_page_text = page_text
+                elif re.search(regex_page, page_text) and start_page_text:
+                    title_match = re.search(regex_title, start_page_text)
+                    title = title_match.group() if title_match else f"Page{page_number + 1}"
+                    title = self.clean_filename(title)
+                    output_file_path = os.path.join(self.output_folder, f"{title}_{page_number}.pdf")
+                    with open(output_file_path, "wb") as output_file:
+                        extracted_pdf.write(output_file)
+                    
+                    # Mulai tandai lagi
+                    extracted_pdf = PyPDF2.PdfWriter()
+                    extracted_pdf.add_page(page)
+                    start_page_text = page_text
+                else:
+                    if page_number == num_pages-1:
+                        extracted_pdf.add_page(page)
+                        title_match = re.search(regex_title, start_page_text)
+                        title = title_match.group() if title_match else f"Page{page_number + 1}"
+                        title = self.clean_filename(title)
+                        output_file_path = os.path.join(self.output_folder, f"{title}_{page_number}.pdf")
+                        with open(output_file_path, "wb") as output_file:
+                            extracted_pdf.write(output_file)
+                    else:
+                        extracted_pdf.add_page(page)
+
+        self.status_label.setText("PDF extraction completed.")
+        # Save current regex patterns to remember for the next session
+        self.save_last_session()
+
+    def copy_first_page_text(self):
+        if not self.pdf_file_path:
+            self.status_label.setText("Please select a PDF file first.")
+            return
+
+        with open(self.pdf_file_path, "rb") as file:
+            pdf_reader = PyPDF2.PdfReader(file)
+            if len(pdf_reader.pages) > 0:
+                first_page = pdf_reader.pages[0]
+                page_text = first_page.extract_text()
+                pyperclip.copy(page_text)
+                self.status_label.setText("Text from first page copied to clipboard.")
+            else:
+                self.status_label.setText("The PDF is empty.")
 
     def save_last_session(self):
         with open("last_session.txt", "w") as file:
-            file.write(self.username + "\n")
-            file.write(self.password + "\n")
-            file.write(self.customization + "\n")
-            file.write(self.MSN)
+            file.write(self.regex_page_edit.text() + "\n")
+            file.write(self.regex_title_edit.text())
 
-    def mulai_login(self):
-        self.username = self.username_edit.text()
-        self.password = self.password_edit.text()
-        self.customization = self.customization_edit.text()
-        self.MSN = self.msn_edit.text()
-        self.save_last_session()  # Save current session values
+    def load_last_session(self):
+        if os.path.exists("last_session.txt"):
+            with open("last_session.txt", "r") as file:
+                lines = file.readlines()
+                if len(lines) >= 2:
+                    self.regex_page_edit.setText(lines[0].strip())
+                    self.regex_title_edit.setText(lines[1].strip())
 
-        waktu_tunggu = 20
-        self.link_text = f'https://w3.airbus.com/1T40/search/text?wc=actype:A330;customization:{self.customization};doctype:AMM;tailNumber:F{self.MSN}'
-
-        chrome_options = Options()
-        chrome_options.add_argument("--headless")
-        # self.driver = webdriver.Chrome("chromedriver.exe", options=chrome_options)
-        self.driver = webdriver.Chrome()
-
-        # Login phase
-        self.driver.get("https://w3.airbus.com/")
-        WebDriverWait(self.driver, waktu_tunggu).until(
-            EC.element_to_be_clickable((By.LINK_TEXT, "click here"))).click()
-        WebDriverWait(self.driver, waktu_tunggu).until(EC.presence_of_element_located(
-            (By.NAME, "USER"))).send_keys(self.username)
-        WebDriverWait(self.driver, waktu_tunggu).until(EC.presence_of_element_located(
-            (By.NAME, "PASSWORD"))).send_keys(self.password)
-        time.sleep(1)
-        WebDriverWait(self.driver, waktu_tunggu).until(EC.element_to_be_clickable(
-            (By.CSS_SELECTOR, "#loginContent > form > input.btn-primary.btn-submit"))).click()
-        self.driver.get(self.link_text)
-        self.status_label.setText("Login Successful!")  # Update status label
-
-    def select_excel_file(self):
+    def select_path_list(self):
         options = QFileDialog.Options()
-        file_name, _ = QFileDialog.getOpenFileName(
-            self, "Select Excel File", "", "Excel Files (*.xlsx *.xls);;All Files (*)", options=options)
+        options |= QFileDialog.ReadOnly
+        file_name, _ = QFileDialog.getOpenFileName(self, "Select Excel File", "", "Excel Files (*.xlsx);;All Files (*)", options=options)
         if file_name:
-            print("Selected file:", file_name)
-            self.file_label.setText(file_name)
-            try:
-                self.refs = pd.read_excel(file_name, sheet_name=0)[
-                    'ref'].to_list()
-            except:
-                print("Error create list")
+            self.path_list = self.get_path_list_from_excel(file_name)
 
-    def download_report(self):
-        _report = pd.DataFrame({'Reference': pd.Series(self.refs),
-                                'Terpaket': pd.Series(self.list_qt)})
-        output_file_path, _ = QFileDialog.getSaveFileName(
-            self, "Save Report in excel", "", "Excel Files (*.xlsx);;All Files (*)")
+    def get_path_list_from_excel(self, excel_file):
+        df = pd.read_excel(excel_file, header=None)
+        path_list = df.iloc[:, 0].tolist()
+        return path_list
+
+    def merge_pdfs(self):
+        if not hasattr(self, "path_list"):
+            self.status_label.setText("Please select an Excel file first.")
+            return
+
+        if len(self.path_list) == 0:
+            self.status_label.setText("No PDF files found in the Excel file.")
+            return
+
+        merged_pdf = PyPDF2.PdfMerger()
+
+        for pdf_path in self.path_list:
+            if not pdf_path.endswith(".pdf"):
+                self.status_label.setText(f"Invalid file: {pdf_path}. Only PDF files can be merged.")
+                continue
+
+            try:
+                merged_pdf.append(pdf_path)
+                self.status_label.setText(f"Merging {os.path.basename(pdf_path)}...")
+            except Exception as e:
+                self.status_label.setText(f"Error merging {os.path.basename(pdf_path)}: {str(e)}")
+
+        # Save the merged PDF to a new file
+        output_file_path, _ = QFileDialog.getSaveFileName(self, "Save Merged PDF", "", "PDF Files (*.pdf);;All Files (*)")
         if output_file_path:
             with open(output_file_path, "wb") as output_file:
-                _report.to_excel(output_file)
-            self.status_label.setText(
-                f"Merged PDF saved to: {output_file_path}")
-
-    def start_scraping_mpd(self):
-        self.loop_flag = True
-        self.stop_scraping_button.setEnabled(True)
-        self.scrape_mpd_button.setEnabled(False)
-        threading.Thread(target=self.scrape_by_mpd).start()
-
-    def stop_scraping_mpd(self):
-        self.loop_flag = False
-        self.stop_scraping_button.setEnabled(False)
-        self.scrape_mpd_button.setEnabled(True)
-
-    def scrape_by_mpd(self):
-        # buat def dulu biar simple
-        self.list_qt = []
-
-        def masukkan_paket_konfirm():
-            _btn = WebDriverWait(self.driver, 20).until(EC.element_to_be_clickable(
-                (By.CSS_SELECTOR, "button[ng-click='$mdOpenMenu($event)']")))
-            time.sleep(0.7)
-            _btn.click()
-            _btn = WebDriverWait(self.driver, 20).until(EC.element_to_be_clickable(
-                (By.CSS_SELECTOR, "a[ng-if='vm.isJobCardActive']")))
-            time.sleep(0.5)
-            _btn.click()
-            _btn = WebDriverWait(self.driver, 20).until(EC.element_to_be_clickable(
-                (By.CSS_SELECTOR, "button[ng-click='callback()']")))
-            time.sleep(0.5)
-            _btn.click()
-            time.sleep(0.5)
-
-        def masukkan_paket():
-            _btn = WebDriverWait(self.driver, 20).until(EC.element_to_be_clickable(
-                (By.CSS_SELECTOR, "button[ng-click='$mdOpenMenu($event)']")))
-            time.sleep(0.7)
-            _btn.click()
-            _btn = WebDriverWait(self.driver, 20).until(EC.element_to_be_clickable(
-                (By.CSS_SELECTOR, "a[ng-if='vm.isJobCardActive']")))
-            time.sleep(0.5)
-            _btn.click()
-            time.sleep(0.5)
-
-        # Clear jobcard package dlu
-        WebDriverWait(self.driver, 20).until(EC.element_to_be_clickable(
-            (By.CSS_SELECTOR, "button[ng-click='navbarCtrl.jobCard()']"))).click()
-        WebDriverWait(self.driver, 20).until(EC.element_to_be_clickable(
-            (By.CSS_SELECTOR, "button[ng-click='confirmClearJobCardBasket($event)']"))).click()
-        WebDriverWait(self.driver, 20).until(EC.element_to_be_clickable(
-            (By.CSS_SELECTOR, "button[ng-click='callback()']"))).click()
-        WebDriverWait(self.driver, 20).until(EC.element_to_be_clickable(
-            (By.CSS_SELECTOR, "button[ng-click='callback()']"))).click()
-
-        awal = True
-        # mulai loop
-        for ref in self.refs:
-            if not self.loop_flag:
-                break  # Stop the loop if loop_flag is False
-
-            len_ref = len(ref)
-            qt_terpaket = 0
-
-            WebDriverWait(self.driver, 20).until(EC.element_to_be_clickable(
-                (By.CSS_SELECTOR, "input[ng-model='SearchBarCtrl.searchText']"))).clear()
-            WebDriverWait(self.driver, 20).until(EC.element_to_be_clickable(
-                (By.CSS_SELECTOR, "input[ng-model='SearchBarCtrl.searchText']"))).send_keys(f'{ref}*')
-            WebDriverWait(self.driver, 20).until(EC.element_to_be_clickable(
-                (By.CSS_SELECTOR, "input[ng-model='SearchBarCtrl.searchText']"))).send_keys(Keys.ENTER)
-
-            try:
-                result_elements = WebDriverWait(self.driver, 5).until(EC.presence_of_all_elements_located(
-                    (By.CSS_SELECTOR, "div[ng-repeat='item in STextCtrl.content']")))
-            except:
-                result_elements = None
-                print('Reference Not found')
-
-            if result_elements:
-                if len(result_elements) > 1 and len_ref == 9:
-                    for result in result_elements:
-                        try:
-                            result.click()
-                        except:
-                            print("error ngklik cuy, coba klik lagi")
-                            result.click()
-                        if awal:
-                            try:
-                                masukkan_paket_konfirm()
-                                WebDriverWait(self.driver, 3).until(EC.element_to_be_clickable(
-                                    (By.CSS_SELECTOR, "div[class='toast-message']"))).click()
-                                qt_terpaket += 1
-                                awal = False
-                            except:
-                                try:
-                                    masukkan_paket_konfirm()
-                                    qt_terpaket += 1
-                                except:
-                                    print("Error packaging")
-                        else:
-                            try:
-                                masukkan_paket()
-                                WebDriverWait(self.driver, 3).until(EC.element_to_be_clickable(
-                                    (By.CSS_SELECTOR, "div[class='toast-message']"))).click()
-                                qt_terpaket += 1
-                            except:
-                                try:
-                                    masukkan_paket()
-                                    qt_terpaket += 1
-                                except:
-                                    print("Error packaging")
-                else:
-                    try:
-                        result_elements[0].click()
-                    except:
-                        print("error ngklik cuy, coba klik lagi")
-                        result_elements[0].click()
-                    if awal:
-                        try:
-                            masukkan_paket_konfirm()
-                            WebDriverWait(self.driver, 3).until(EC.element_to_be_clickable(
-                                (By.CSS_SELECTOR, "div[class='toast-message']"))).click()
-                            qt_terpaket += 1
-                            awal = False
-                        except:
-                            try:
-                                masukkan_paket_konfirm()
-                                qt_terpaket += 1
-                            except:
-                                print("Error packaging")
-                    else:
-                        try:
-                            masukkan_paket()
-                            WebDriverWait(self.driver, 3).until(EC.element_to_be_clickable(
-                                (By.CSS_SELECTOR, "div[class='toast-message']"))).click()
-                            qt_terpaket += 1
-                        except:
-                            try:
-                                masukkan_paket()
-                                qt_terpaket += 1
-                            except:
-                                print("Error packaging")
-                self.list_qt.append(qt_terpaket)
-                time.sleep(random.randrange(2, 3))
-
-    def scrape_amm(self):
-        # buat def dulu biar simple
-        def masukkan_paket_konfirm():
-            _btn = WebDriverWait(self.driver, 20).until(EC.element_to_be_clickable(
-                (By.CSS_SELECTOR, "button[aria-label='Print']")))
-            time.sleep(0.7)
-            _btn.click()
-            _btn = WebDriverWait(self.driver, 20).until(EC.element_to_be_clickable(
-                (By.CSS_SELECTOR, "a[ng-click='vm.addTaskToPdfBasket($event)']")))
-            time.sleep(0.5)
-            _btn.click()
-            _btn = WebDriverWait(self.driver, 20).until(EC.element_to_be_clickable(
-                (By.CSS_SELECTOR, "button[ng-click='callback()']")))
-            time.sleep(0.5)
-            _btn.click()
-            time.sleep(0.5)
-
-        def masukkan_paket():
-            _btn = WebDriverWait(self.driver, 20).until(EC.element_to_be_clickable(
-                (By.CSS_SELECTOR, "button[aria-label='Print']")))
-            time.sleep(0.7)
-            _btn.click()
-            _btn = WebDriverWait(self.driver, 20).until(EC.element_to_be_clickable(
-                (By.CSS_SELECTOR, "a[ng-click='vm.addTaskToPdfBasket($event)']")))
-            time.sleep(0.5)
-            _btn.click()
-            time.sleep(0.5)
-
-        awal = True
-        # mulai loop
-        for ref in self.refs:
-            if not self.loop_flag:
-                break  # Stop the loop if loop_flag is False
-
-            WebDriverWait(self.driver, 20).until(EC.element_to_be_clickable(
-                (By.CSS_SELECTOR, "input[ng-model='SearchBarCtrl.searchText']"))).clear()
-            WebDriverWait(self.driver, 20).until(EC.element_to_be_clickable(
-                (By.CSS_SELECTOR, "input[ng-model='SearchBarCtrl.searchText']"))).send_keys(f'{ref}*')
-            WebDriverWait(self.driver, 20).until(EC.element_to_be_clickable(
-                (By.CSS_SELECTOR, "input[ng-model='SearchBarCtrl.searchText']"))).send_keys(Keys.ENTER)
-
-            try:
-                result_elements = WebDriverWait(self.driver, 5).until(EC.presence_of_all_elements_located(
-                    (By.CSS_SELECTOR, "div[ng-repeat='item in STextCtrl.content']")))
-            except:
-                result_elements = None
-                print('Reference Not found')
-
-            if result_elements:
-                try:
-                    result_elements[0].click()
-                except:
-                    print("error ngklik cuy, coba klik lagi")
-                    result_elements[0].click()
-                if awal:
-                    try:
-                        masukkan_paket_konfirm()
-                        WebDriverWait(self.driver, 3).until(EC.element_to_be_clickable(
-                            (By.CSS_SELECTOR, "div[class='toast-message']"))).click()
-                        awal = False
-                    except:
-                        try:
-                            masukkan_paket_konfirm()
-                        except:
-                            print("Error packaging")
-                else:
-                    try:
-                        masukkan_paket()
-                        WebDriverWait(self.driver, 3).until(EC.element_to_be_clickable(
-                            (By.CSS_SELECTOR, "div[class='toast-message']"))).click()
-                    except:
-                        try:
-                            masukkan_paket()
-                        except:
-                            print("Error packaging")
-
-                time.sleep(random.randrange(2, 3))
-
-    def start_scraping_amm(self):
-        self.loop_flag = True
-        self.stop_scraping_amm_button.setEnabled(True)
-        self.scrape_amm_button.setEnabled(False)
-        threading.Thread(target=self.scrape_amm).start()
-
-    def stop_scraping_amm(self):
-        self.loop_flag = False
-        self.stop_scraping_amm_button.setEnabled(False)
-        self.scrape_amm_button.setEnabled(True)
+                merged_pdf.write(output_file)
+            self.status_label.setText(f"Merged PDF saved to: {output_file_path}")
 
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    window = PDFScraper()
+    window = PDFExtractorApp()
     window.show()
     sys.exit(app.exec_())
